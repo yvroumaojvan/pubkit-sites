@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>金币小银行</title>
+<style>
+:root{
+  --bg:#0a0e13; --card:#141d27; --line:#ffffff14;
+  --gold:#FBBF24; --gold2:#FDE68A; --mint:#34D399; --mint2:#5EEAD4;
+  --text:#e8eef5; --dim:#7d8b99; --dim2:#5a6875;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{
+  margin:0;min-height:100vh;color:var(--text);
+  background:
+    radial-gradient(110% 60% at 50% -10%, #3a2a0a 0%, transparent 60%),
+    radial-gradient(80% 50% at 90% 10%, #12303a 0%, transparent 55%),
+    var(--bg);
+  font-family:system-ui,-apple-system,"PingFang SC",sans-serif;
+  display:flex;flex-direction:column;align-items:center;
+  padding:28px 16px calc(28px + env(safe-area-inset-bottom));
+}
+h1{font-size:15px;font-weight:700;color:var(--dim);letter-spacing:2px;margin:0 0 22px}
+.coin{
+  width:150px;height:150px;border-radius:50%;display:grid;place-items:center;
+  background:radial-gradient(circle at 32% 28%, #FDE68A, #F59E0B 58%, #B45309);
+  box-shadow:0 18px 60px -18px #F59E0B, inset 0 -10px 22px #7c2d12aa, inset 0 8px 20px #fff6;
+  font-size:58px;font-weight:900;color:#451a03;position:relative;
+  transition:transform .18s;
+}
+.coin:active{transform:scale(.94)}
+.coin::after{
+  content:"";position:absolute;inset:12px;border-radius:50%;
+  border:2px dashed #7c2d1266;
+}
+.balance{font-size:44px;font-weight:900;margin:22px 0 4px;
+         background:linear-gradient(140deg,var(--gold2),var(--gold));
+         -webkit-background-clip:text;background-clip:text;color:transparent}
+.unit{font-size:13px;color:var(--dim);letter-spacing:1px;margin-bottom:26px}
+
+.btns{display:flex;gap:12px;width:100%;max-width:360px}
+.btn{
+  flex:1;border:0;border-radius:16px;padding:16px 0;font-size:15px;font-weight:800;
+  cursor:pointer;transition:.16s;
+}
+.btn:active{transform:scale(.96)}
+.btn.main{background:linear-gradient(140deg,var(--mint),#22b98a);color:#04120e;
+          box-shadow:0 10px 26px -12px var(--mint)}
+.btn.gold{background:linear-gradient(140deg,var(--gold2),var(--gold));color:#451a03;
+          box-shadow:0 10px 26px -12px var(--gold)}
+
+.box{
+  width:100%;max-width:360px;margin-top:22px;border:1px solid var(--line);
+  background:#111a24cc;border-radius:16px;padding:15px 16px;backdrop-filter:blur(8px);
+}
+.box .row{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--dim)}
+.box .row b{color:var(--gold)}
+.bar{height:5px;border-radius:99px;background:#ffffff12;margin-top:10px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;border-radius:99px;
+       background:linear-gradient(90deg,var(--gold),var(--mint));transition:width .25s linear}
+.hint{font-size:11px;color:var(--dim2);margin-top:9px;line-height:1.6}
+
+.logs{width:100%;max-width:360px;margin-top:18px}
+.logs h2{font-size:12px;color:var(--dim2);letter-spacing:1px;margin:0 0 8px}
+.logline{font-size:12px;color:var(--dim);padding:6px 2px;border-bottom:1px solid #ffffff08;
+         display:flex;justify-content:space-between}
+.logline .t{color:var(--dim2);font-size:10.5px}
+.logline .plus{color:var(--gold);font-weight:700}
+
+.toast{
+  position:fixed;left:50%;bottom:26px;transform:translate(-50%,16px);
+  background:#1d2833;border:1px solid var(--line);border-radius:99px;
+  padding:10px 18px;font-size:13px;font-weight:600;opacity:0;transition:.22s;pointer-events:none;
+}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+</style>
+</head>
+<body>
+
+<h1>金 币 小 银 行</h1>
+<div class="coin" id="mine">⛏</div>
+<div class="balance" id="balance">0</div>
+<div class="unit">枚金币</div>
+
+<div class="btns">
+  <button class="btn main" id="add1">挖矿 +1</button>
+  <button class="btn gold" id="add10">暴击 +10</button>
+</div>
+
+<div class="box">
+  <div class="row"><span>缓存箱（30 秒提交一次）</span><b id="pending">0</b></div>
+  <div class="bar"><i id="bar"></i></div>
+  <div class="hint" id="hint">点挖矿先存进缓存箱，30 秒后自动一次性提交到服务器 —— 这样不会每点一下都请求。
+  </div>
+  <button class="btn main" style="margin-top:12px;padding:12px" id="flush">立即提交</button>
+</div>
+
+<div class="logs">
+  <h2>操作记录</h2>
+  <div id="logList"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const SLUG = '金币小银行';
+const API = 'https://yvroumaojvan.pythonanywhere.com/api/kv';
+const BANK = 30000;
+const STATIC = /github\.io$/i.test(location.hostname);
+
+let balance = 0;
+let pending = 0;
+let timer = null;
+let deadline = 0;
+let logs = [];
+
+const $ = s => document.querySelector(s);
+
+function toast(msg){
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = 'on';
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.className = '', 1800);
+}
+
+function render(){
+  $('#balance').textContent = balance;
+  $('#pending').textContent = pending;
+  $('#hint').textContent = STATIC
+    ? (pending > 0
+        ? '☁️ 永久版：还有 ' + pending + ' 枚在缓存箱里，30 秒后自动提交到云端…'
+        : '☁️ 永久版：金币存在云端数据库，关掉页面、手机关机都不会丢。先攒进缓存箱，30 秒一次性提交。')
+    : (pending > 0
+        ? '还有 ' + pending + ' 枚在缓存箱里，等自动提交…'
+        : '点挖矿先存进缓存箱，30 秒后自动一次性提交到云端 —— 这样不会每点一下都请求。');
+  if(pending > 0 && deadline){
+    const left = Math.max(0, deadline - Date.now());
+    $('#bar').style.width = (100 - left / BANK * 100) + '%';
+  } else {
+    $('#bar').style.width = '0%';
+  }
+  $('#logList').innerHTML = logs.length
+    ? logs.map(l => `<div class="logline"><span class="plus">+${l.n}</span><span>${l.txt}</span><span class="t">${l.t}</span></div>`).join('')
+    : '<div class="logline"><span style="color:#5a6875">还没操作</span></div>';
+}
+
+function pushLog(n, txt){
+  const d = new Date();
+  logs.unshift({ n, txt, t: String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0') + ':' + String(d.getSeconds()).padStart(2,'0') });
+  if(logs.length > 12) logs.pop();
+  render();
+}
+
+async function load(){
+  try{
+    const r = await fetch(API + '/' + encodeURIComponent(SLUG) + '?key=coins');
+    const j = await r.json();
+    balance = Number(j.value || 0);
+    render();
+  }catch(e){ /* 后端不在时静默 */ }
+}
+
+function addCoins(n, label){
+  pending += n;
+  if(!timer){
+    deadline = Date.now() + BANK;
+    timer = setInterval(tick, 250);
+    setTimeout(flush, BANK);
+  }
+  pushLog(n, label);
+  render();
+}
+
+function tick(){
+  const left = Math.max(0, deadline - Date.now());
+  $('#bar').style.width = (100 - left / BANK * 100) + '%';
+  if(left <= 0){ clearInterval(timer); timer = null; }
+}
+
+async function flush(){
+  if(timer){ clearInterval(timer); timer = null; }
+  deadline = 0;
+  if(pending <= 0){ render(); return; }
+  const n = pending;
+  pending = 0;
+  render();
+  try{
+    const r = await fetch(API, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ slug: SLUG, key: 'coins', delta: n })
+    });
+    const j = await r.json();
+    if(j.ok){ balance = Number(j.value || balance + n); toast('已存入 ' + n + ' 枚 ✅'); }
+    else { pending += n; toast('提交失败：' + (j.error || '')); }
+  }catch(e){
+    pending += n;
+    toast('网络断了，金币还在缓存箱里');
+  }
+  render();
+}
+
+$('#add1').onclick = () => addCoins(1, '挖矿');
+$('#add10').onclick = () => addCoins(10, '暴击');
+$('#mine').onclick = () => addCoins(1, '点金币');
+$('#flush').onclick = () => flush();
+
+window.addEventListener('beforeunload', () => {
+  if(pending > 0){
+    try{
+      navigator.sendBeacon(API, new Blob([JSON.stringify({ slug: SLUG, key: 'coins', delta: pending })], { type:'application/json' }));
+    }catch(e){}
+  }
+});
+
+load();
+setInterval(() => { if(pending === 0) load(); }, 15000);
+</script>
+</body>
+</html>
